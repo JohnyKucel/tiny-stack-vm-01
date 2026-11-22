@@ -2,36 +2,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const CAP_STACK = 256, CAP_CALL = 64, CAP_MEM = 256;
-const CAP_STEPS = 1000000, CAP_OUT = 65536, INT_MIN = -2147483648;
+const CAP_STEPS = 1000000, CAP_OUT = 65536;
 const T_UNDERFLOW = 2, T_OVERFLOW = 3, T_DIVZERO = 4, T_BADOP = 5;
 const T_MEM = 6, T_CALLDEEP = 7, T_RETEMPTY = 8, T_PC = 9;
 const T_STEPS = 10, T_OUTPUT = 11;
 
-type Meta = [imm: number, pops: number, pushes: number];
+type Meta = [number, number, number];
 const OPBYTES = "0001020304050607101112131415161718191a1b1c1d1e2021223031323334404150515253";
 const OPMETA = "000101401010012022023033021021021021021021021011021021021011021021021021021021200210210200000011020010010001010";
 const META: Array<Meta | undefined> = new Array(256);
-for (let i = 0; i < 37; i++) {
-  const k = i * 3;
-  META[parseInt(OPBYTES.slice(i * 2, i * 2 + 2), 16)] = [+OPMETA[k], +OPMETA[k + 1], +OPMETA[k + 2]];
-}
-const enc = new TextEncoder();
+for (let i = 0, k = 0; i < 37; i++, k += 3) META[parseInt(OPBYTES.slice(i * 2, i * 2 + 2), 16)] = [+OPMETA[k], +OPMETA[k + 1], +OPMETA[k + 2]];
 
-function execute(prog: Uint8Array, feed: Uint8Array): { bytes: Uint8Array; code: number } {
-  const stk = new Int32Array(CAP_STACK);
-  const ret = new Int32Array(CAP_CALL);
-  const mem = new Int32Array(CAP_MEM);
-  const sink = new Uint8Array(CAP_OUT);
-  let sp = 0;
-  let rp = 0;
-  let pc = 0;
-  let ip = 0;
-  let op = 0;
-  let done = 0;
-  const finish = (code: number): { bytes: Uint8Array; code: number } => ({
-    bytes: sink.subarray(0, op),
-    code,
-  });
+function execute(prog: Uint8Array, feed: Uint8Array) {
+  const stk = new Int32Array(CAP_STACK), ret = new Int32Array(CAP_CALL);
+  const mem = new Int32Array(CAP_MEM), sink = new Uint8Array(CAP_OUT);
+  let sp = 0, rp = 0, pc = 0, ip = 0, op = 0, done = 0;
+  const finish = (code: number) => ({ bytes: sink.subarray(0, op), code });
   for (;;) {
     if (done === CAP_STEPS) return finish(T_STEPS);
     if (pc < 0 || pc >= prog.length) return finish(T_PC);
@@ -81,7 +67,7 @@ function execute(prog: Uint8Array, feed: Uint8Array): { bytes: Uint8Array; code:
       else if (opcode === 0x12) val = Math.imul(lhs, rhs);
       else if (opcode === 0x13) {
         if (rhs === 0) return finish(T_DIVZERO);
-        val = lhs === INT_MIN && rhs === -1 ? INT_MIN : (lhs / rhs) | 0;
+        val = lhs === -2147483648 && rhs === -1 ? -2147483648 : (lhs / rhs) | 0;
       } else if (opcode === 0x14) {
         if (rhs === 0) return finish(T_DIVZERO);
         val = rhs === -1 ? 0 : (lhs % rhs) | 0;
@@ -140,7 +126,7 @@ function execute(prog: Uint8Array, feed: Uint8Array): { bytes: Uint8Array; code:
       continue;
     }
     if (opcode === 0x50) {
-      const b = enc.encode(String(stk[sp - 1]));
+      const b = Buffer.from(String(stk[sp - 1]));
       if (op + b.length > CAP_OUT) return finish(T_OUTPUT);
       sink.set(b, op);
       op += b.length;
@@ -161,25 +147,20 @@ function execute(prog: Uint8Array, feed: Uint8Array): { bytes: Uint8Array; code:
   }
 }
 
-function readIfPresent(file: string): Uint8Array {
-  try {
-    return fs.readFileSync(file);
-  } catch {
-    return new Uint8Array(0);
-  }
+function readOpt(f: string): Uint8Array {
+  try { return fs.readFileSync(f); } catch { return new Uint8Array(0); }
 }
 
 function main(): void {
-  const inDir = process.env.MAKEFUN_INPUT_DIR ?? "/input";
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+  const inDir = process.env.MAKEFUN_INPUT_DIR ?? "/input", outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
   const names = fs
     .readdirSync(inDir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort();
   for (const id of names) {
-    const prog = readIfPresent(path.join(inDir, id, "program.bin"));
-    const feed = readIfPresent(path.join(inDir, id, "input.bin"));
+    const prog = readOpt(path.join(inDir, id, "program.bin"));
+    const feed = readOpt(path.join(inDir, id, "input.bin"));
     const result = execute(prog, feed);
     const dest = path.join(outDir, id);
     fs.mkdirSync(dest, { recursive: true });
